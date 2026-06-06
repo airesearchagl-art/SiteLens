@@ -136,3 +136,13 @@ resources/ffmpeg/win/ffprobe.exe
 - 案件単位のプロジェクト管理
 - GitHub Releases対応
 - 自動アップデート対応
+
+## v0.2.0
+
+- コメント機能
+- タグ機能
+- 優先度管理
+- CSV出力
+- JSON出力
+- 建築メタ情報
+- フィルタ機能

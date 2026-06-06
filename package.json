@@ -1,6 +1,6 @@
 {
   "name": "sitelens",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "SiteLens - Construction media review tool",
   "author": "AI Research AGL",
   "main": "main.js",
@@ -47,7 +47,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "artifactName": "SiteLens Setup.exe"

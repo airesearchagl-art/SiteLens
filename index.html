@@ -12,7 +12,7 @@
         <div>
           <p class="eyebrow">Construction Media Review Tool</p>
           <h1>SiteLens</h1>
-          <p>現場動画から記録用静止画を抽出し、報告資料に使いやすく整理します。</p>
+          <p>現場動画から記録用静止画を抽出し、レビュー情報をCSV/JSONとして整理します。</p>
         </div>
         <div class="status-stack">
           <span id="toolStatus" class="status-chip">FFmpeg checking</span>
@@ -85,7 +85,8 @@
             <progress id="progressBar" value="0" max="100"></progress>
             <div class="button-row">
               <button id="openOutputButton" class="secondary-button" type="button" disabled>出力フォルダを開く</button>
-              <button id="saveProjectButton" class="secondary-button" type="button" disabled>メタ情報を保存</button>
+              <button id="saveProjectButton" class="secondary-button" type="button" disabled>JSON保存</button>
+              <button id="exportCsvButton" class="secondary-button" type="button" disabled>CSV出力</button>
             </div>
           </article>
         </section>
@@ -104,21 +105,53 @@
           </form>
         </section>
 
-        <section class="panel">
-          <div class="panel-heading">
-            <h2>抽出画像</h2>
-            <span id="frameCount" class="status-chip">0 / 0 selected</span>
-          </div>
-          <div class="frame-actions">
-            <button id="selectAllFrames" class="secondary-button" type="button" disabled>全選択</button>
-            <button id="clearFrameSelection" class="secondary-button" type="button" disabled>選択解除</button>
-            <button id="copySelectedButton" class="primary-button" type="button" disabled>選択画像を出力</button>
-          </div>
-          <div id="frameGrid" class="frame-grid"></div>
+        <section class="review-layout">
+          <article class="panel frame-panel">
+            <div class="panel-heading">
+              <h2>抽出画像</h2>
+              <span id="frameCount" class="status-chip">0 / 0 selected</span>
+            </div>
+            <div class="filter-bar">
+              <label><span>タグ</span><select id="filterTag"></select></label>
+              <label><span>優先度</span><select id="filterPriority"></select></label>
+              <button id="clearFiltersButton" class="secondary-button" type="button">フィルタ解除</button>
+            </div>
+            <div class="frame-actions">
+              <button id="selectAllFrames" class="secondary-button" type="button" disabled>表示中を全選択</button>
+              <button id="clearFrameSelection" class="secondary-button" type="button" disabled>表示中を選択解除</button>
+              <button id="copySelectedButton" class="primary-button" type="button" disabled>選択画像を出力</button>
+            </div>
+            <div id="frameGrid" class="frame-grid"></div>
+          </article>
+
+          <aside class="panel review-panel">
+            <div class="panel-heading compact-heading">
+              <h2>Review Panel</h2>
+              <span class="status-chip">CSV / JSON</span>
+            </div>
+            <p id="activeFrameName" class="active-frame-name">画像を選択してください</p>
+            <label>
+              <span>優先度</span>
+              <select id="reviewPriority" disabled></select>
+            </label>
+            <div>
+              <span class="field-label">タグ</span>
+              <div id="reviewTags" class="tag-options"></div>
+            </div>
+            <label>
+              <span>コメント</span>
+              <textarea id="reviewComment" rows="5" disabled placeholder="例: 設備配管支持金物未施工"></textarea>
+            </label>
+            <div class="review-meta-grid">
+              <label><span>階</span><input id="reviewFloor" type="text" disabled placeholder="3F" /></label>
+              <label><span>通り芯</span><input id="reviewGrid" type="text" disabled placeholder="A-5通り" /></label>
+              <label><span>部屋名</span><input id="reviewRoom" type="text" disabled placeholder="大会議室" /></label>
+            </div>
+          </aside>
         </section>
       </main>
 
-      <div id="versionBadge" class="version-badge">SiteLens v0.1.0</div>
+      <div id="versionBadge" class="version-badge">SiteLens v0.2.0</div>
     </div>
     <script src="renderer.js"></script>
   </body>

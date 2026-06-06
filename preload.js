@@ -1,4 +1,4 @@
-﻿const { contextBridge, ipcRenderer, webUtils } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("siteLens", {
   getFilePath: (file) => webUtils.getPathForFile(file),
@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld("siteLens", {
   extractFrames: (payload) => ipcRenderer.invoke("frames:extract", payload),
   copySelectedFrames: (payload) => ipcRenderer.invoke("frames:copy-selected", payload),
   saveProject: (payload) => ipcRenderer.invoke("project:save", payload),
+  exportReviewCsv: (payload) => ipcRenderer.invoke("review:export-csv", payload),
   onProgress: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on("frames:progress", listener);

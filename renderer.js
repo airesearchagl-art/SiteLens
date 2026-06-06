@@ -1,11 +1,19 @@
-﻿const state = {
+﻿const TAG_OPTIONS = ["構造", "建築", "電気", "機械", "外構", "内装", "仕上", "防災", "家具", "その他"];
+const PRIORITY_OPTIONS = ["要確認", "是正", "保留", "完了", "情報"];
+
+const state = {
   tools: null,
   settings: null,
   metadata: null,
   outputDirectory: "",
   frames: [],
+  activeFramePath: "",
   extracting: false,
   saveTimer: null,
+  filters: {
+    tag: "",
+    priority: "",
+  },
 };
 
 const els = {
@@ -38,21 +46,40 @@ const els = {
   location: document.querySelector("#location"),
   memo: document.querySelector("#memo"),
   saveProjectButton: document.querySelector("#saveProjectButton"),
+  exportCsvButton: document.querySelector("#exportCsvButton"),
   frameCount: document.querySelector("#frameCount"),
   selectAllFrames: document.querySelector("#selectAllFrames"),
   clearFrameSelection: document.querySelector("#clearFrameSelection"),
   copySelectedButton: document.querySelector("#copySelectedButton"),
   frameGrid: document.querySelector("#frameGrid"),
+  filterTag: document.querySelector("#filterTag"),
+  filterPriority: document.querySelector("#filterPriority"),
+  clearFiltersButton: document.querySelector("#clearFiltersButton"),
+  activeFrameName: document.querySelector("#activeFrameName"),
+  reviewPriority: document.querySelector("#reviewPriority"),
+  reviewTags: document.querySelector("#reviewTags"),
+  reviewComment: document.querySelector("#reviewComment"),
+  reviewFloor: document.querySelector("#reviewFloor"),
+  reviewGrid: document.querySelector("#reviewGrid"),
+  reviewRoom: document.querySelector("#reviewRoom"),
 };
 
 init();
 
 async function init() {
+  populateReviewControls();
   bindEvents();
   await renderVersion();
   await restoreSettings();
   await checkTools();
   window.siteLens.onProgress(updateProgress);
+}
+
+function populateReviewControls() {
+  els.filterTag.innerHTML = '<option value="">タグすべて</option>' + TAG_OPTIONS.map((tag) => `<option value="${tag}">${tag}</option>`).join("");
+  els.filterPriority.innerHTML = '<option value="">優先度すべて</option>' + PRIORITY_OPTIONS.map((priority) => `<option value="${priority}">${priority}</option>`).join("");
+  els.reviewPriority.innerHTML = PRIORITY_OPTIONS.map((priority) => `<option value="${priority}">${priority}</option>`).join("");
+  els.reviewTags.innerHTML = TAG_OPTIONS.map((tag) => `<label><input type="checkbox" value="${tag}"><span>${tag}</span></label>`).join("");
 }
 
 function bindEvents() {
@@ -61,9 +88,11 @@ function bindEvents() {
   els.extractButton.addEventListener("click", extractFrames);
   els.openOutputButton.addEventListener("click", openOutputDirectory);
   els.saveProjectButton.addEventListener("click", saveProject);
+  els.exportCsvButton.addEventListener("click", exportReviewCsv);
   els.copySelectedButton.addEventListener("click", copySelectedFrames);
   els.selectAllFrames.addEventListener("click", () => setFrameSelection(true));
   els.clearFrameSelection.addEventListener("click", () => setFrameSelection(false));
+  els.clearFiltersButton.addEventListener("click", clearFilters);
 
   els.intervalSelect.addEventListener("change", () => {
     updateIntervalControls();
@@ -74,6 +103,22 @@ function bindEvents() {
   [els.projectName, els.shootingDate, els.photographer, els.location, els.memo].forEach((input) => {
     input.addEventListener("input", scheduleSaveSettings);
   });
+
+  [els.filterTag, els.filterPriority].forEach((input) => {
+    input.addEventListener("change", () => {
+      state.filters.tag = els.filterTag.value;
+      state.filters.priority = els.filterPriority.value;
+      renderFrames();
+      scheduleSaveSettings();
+    });
+  });
+
+  els.reviewPriority.addEventListener("change", updateActiveFrameReview);
+  els.reviewComment.addEventListener("input", updateActiveFrameReview);
+  els.reviewFloor.addEventListener("input", updateActiveFrameReview);
+  els.reviewGrid.addEventListener("input", updateActiveFrameReview);
+  els.reviewRoom.addEventListener("input", updateActiveFrameReview);
+  els.reviewTags.addEventListener("change", updateActiveFrameReview);
 
   ["dragenter", "dragover"].forEach((name) => {
     els.dropZone.addEventListener(name, (event) => {
@@ -97,9 +142,16 @@ function bindEvents() {
 
   els.frameGrid.addEventListener("change", (event) => {
     if (!event.target.matches("[data-frame-select]")) return;
-    const frame = state.frames.find((item) => item.path === event.target.dataset.frameSelect);
+    const frame = findFrame(event.target.dataset.frameSelect);
     if (frame) frame.selected = event.target.checked;
     updateFrameControls();
+    scheduleAutoSaveProject();
+  });
+
+  els.frameGrid.addEventListener("click", (event) => {
+    const card = event.target.closest("[data-frame-card]");
+    if (!card) return;
+    setActiveFrame(card.dataset.frameCard);
   });
 }
 
@@ -146,6 +198,12 @@ function applySettings(settings = {}) {
   els.photographer.value = metadata.photographer || "";
   els.location.value = metadata.location || "";
   els.memo.value = metadata.memo || "";
+  state.filters.tag = settings.review?.filterTag || "";
+  state.filters.priority = settings.review?.filterPriority || "";
+  els.filterTag.value = state.filters.tag;
+  els.filterPriority.value = state.filters.priority;
+  els.reviewPriority.value = settings.review?.priority || "情報";
+  setCheckedTags(settings.review?.tags || []);
   if (settings.paths?.lastOutputDirectory) {
     state.outputDirectory = settings.paths.lastOutputDirectory;
     els.outputDirectoryText.textContent = state.outputDirectory;
@@ -219,13 +277,16 @@ async function extractFrames() {
       outputDirectory,
     });
     state.outputDirectory = result.outputDirectory;
-    state.frames = result.frames;
+    state.frames = result.frames.map((frame) => ({ ...frame, priority: "情報", tags: [], comment: "", floor: "", grid: "", room: "" }));
+    state.activeFramePath = state.frames[0]?.path || "";
     els.outputDirectoryText.textContent = result.outputDirectory;
     renderFrames();
+    renderActiveFrameReview();
     setRunStatus("完了", 100);
     showNotice(`${state.frames.length} 枚の静止画を抽出しました。`);
     els.openOutputButton.disabled = false;
     els.saveProjectButton.disabled = false;
+    els.exportCsvButton.disabled = false;
     await saveProject();
     await saveSettings({ lastOutputDirectory: result.outputDirectory });
   } catch (error) {
@@ -254,6 +315,23 @@ async function copySelectedFrames() {
   }
 }
 
+async function exportReviewCsv() {
+  const selectedItems = getReviewItems().filter((item) => item.selected);
+  if (!selectedItems.length) {
+    showError("CSV出力する画像を選択してください。");
+    return;
+  }
+  try {
+    const result = await window.siteLens.exportReviewCsv({
+      outputDirectory: state.outputDirectory,
+      reviewItems: selectedItems,
+    });
+    showNotice(`CSVを出力しました: ${result.csvPath}`);
+  } catch (error) {
+    showError(toMessage(error));
+  }
+}
+
 async function saveProject() {
   if (!state.outputDirectory) return;
   try {
@@ -262,9 +340,10 @@ async function saveProject() {
       metadata: getProjectMetadata(),
       video: state.metadata,
       frames: state.frames,
+      reviewItems: getReviewItems(),
     });
     await saveSettings();
-    showNotice(`メタ情報を保存しました: ${result.projectPath}`);
+    showNotice(`レビュー情報を保存しました: ${result.projectPath}`);
   } catch (error) {
     showError(toMessage(error));
   }
@@ -280,19 +359,24 @@ async function openOutputDirectory() {
 }
 
 function renderFrames() {
+  const visibleFrames = getVisibleFrames();
   els.frameGrid.innerHTML = "";
-  for (const frame of state.frames) {
+  for (const frame of visibleFrames) {
     const card = document.createElement("article");
-    card.className = "frame-card";
+    card.className = `frame-card priority-${priorityClass(frame.priority)}${frame.path === state.activeFramePath ? " is-active" : ""}`;
+    card.dataset.frameCard = frame.path;
     card.innerHTML = `
-      <label class="frame-check">
+      <label class="frame-check" onclick="event.stopPropagation()">
         <input type="checkbox" data-frame-select="${escapeHtml(frame.path)}" ${frame.selected ? "checked" : ""}>
         <span>${escapeHtml(frame.timecode)}</span>
       </label>
       <img src="${frame.previewUrl}" alt="${escapeHtml(frame.fileName)}">
       <div class="frame-meta">
-        <strong>${escapeHtml(frame.fileName)}</strong>
+        <div class="frame-title-row"><strong>${escapeHtml(frame.fileName)}</strong><span class="priority-badge ${priorityClass(frame.priority)}">${escapeHtml(frame.priority)}</span></div>
         <span>${escapeHtml(frame.timecode)}</span>
+        <span>${escapeHtml([frame.floor, frame.grid, frame.room].filter(Boolean).join(" / ") || "-")}</span>
+        <p>${escapeHtml(frame.comment || "コメントなし")}</p>
+        <div class="tag-list">${frame.tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div>
       </div>
     `;
     els.frameGrid.appendChild(card);
@@ -300,27 +384,121 @@ function renderFrames() {
   updateFrameControls();
 }
 
-function setFrameSelection(selected) {
-  for (const frame of state.frames) frame.selected = selected;
+function getVisibleFrames() {
+  return state.frames.filter((frame) => {
+    const tagOk = !state.filters.tag || frame.tags.includes(state.filters.tag);
+    const priorityOk = !state.filters.priority || frame.priority === state.filters.priority;
+    return tagOk && priorityOk;
+  });
+}
+
+function setActiveFrame(path) {
+  state.activeFramePath = path;
   renderFrames();
+  renderActiveFrameReview();
+}
+
+function renderActiveFrameReview() {
+  const frame = getActiveFrame();
+  const disabled = !frame;
+  els.activeFrameName.textContent = frame ? `${frame.fileName} / ${frame.timecode}` : "画像を選択してください";
+  els.reviewPriority.disabled = disabled;
+  els.reviewComment.disabled = disabled;
+  els.reviewFloor.disabled = disabled;
+  els.reviewGrid.disabled = disabled;
+  els.reviewRoom.disabled = disabled;
+  els.reviewPriority.value = frame?.priority || "情報";
+  els.reviewComment.value = frame?.comment || "";
+  els.reviewFloor.value = frame?.floor || "";
+  els.reviewGrid.value = frame?.grid || "";
+  els.reviewRoom.value = frame?.room || "";
+  setCheckedTags(frame?.tags || []);
+  for (const input of els.reviewTags.querySelectorAll("input")) input.disabled = disabled;
+}
+
+function updateActiveFrameReview() {
+  const frame = getActiveFrame();
+  if (!frame) return;
+  frame.priority = els.reviewPriority.value;
+  frame.comment = els.reviewComment.value;
+  frame.floor = els.reviewFloor.value;
+  frame.grid = els.reviewGrid.value;
+  frame.room = els.reviewRoom.value;
+  frame.tags = getCheckedTags();
+  renderFrames();
+  scheduleSaveSettings();
+  scheduleAutoSaveProject();
+}
+
+function getActiveFrame() {
+  return findFrame(state.activeFramePath);
+}
+
+function findFrame(path) {
+  return state.frames.find((frame) => frame.path === path);
+}
+
+function getCheckedTags() {
+  return Array.from(els.reviewTags.querySelectorAll("input:checked")).map((input) => input.value);
+}
+
+function setCheckedTags(tags) {
+  const values = new Set(tags || []);
+  for (const input of els.reviewTags.querySelectorAll("input")) input.checked = values.has(input.value);
+}
+
+function clearFilters() {
+  state.filters.tag = "";
+  state.filters.priority = "";
+  els.filterTag.value = "";
+  els.filterPriority.value = "";
+  renderFrames();
+  scheduleSaveSettings();
+}
+
+function setFrameSelection(selected) {
+  for (const frame of getVisibleFrames()) frame.selected = selected;
+  renderFrames();
+  scheduleAutoSaveProject();
 }
 
 function updateFrameControls() {
   const total = state.frames.length;
+  const visible = getVisibleFrames().length;
   const selected = state.frames.filter((frame) => frame.selected).length;
-  els.frameCount.textContent = `${selected} / ${total} selected`;
+  els.frameCount.textContent = `${selected} / ${total} selected (${visible} visible)`;
   els.copySelectedButton.disabled = selected === 0;
-  els.selectAllFrames.disabled = total === 0;
-  els.clearFrameSelection.disabled = total === 0;
+  els.exportCsvButton.disabled = selected === 0;
+  els.selectAllFrames.disabled = visible === 0;
+  els.clearFrameSelection.disabled = visible === 0;
 }
 
 function resetFrames() {
   state.frames = [];
+  state.activeFramePath = "";
   els.frameGrid.innerHTML = "";
   els.openOutputButton.disabled = true;
   els.copySelectedButton.disabled = true;
   els.saveProjectButton.disabled = true;
+  els.exportCsvButton.disabled = true;
+  renderActiveFrameReview();
   updateFrameControls();
+}
+
+function getReviewItems() {
+  return state.frames.map((frame) => ({
+    file: frame.fileName,
+    frame: frame.fileName,
+    timestamp: frame.timecode,
+    timecode: frame.timecode,
+    priority: frame.priority || "情報",
+    tags: frame.tags || [],
+    comment: frame.comment || "",
+    floor: frame.floor || "",
+    grid: frame.grid || "",
+    room: frame.room || "",
+    selected: frame.selected !== false,
+  }));
 }
 
 function getIntervalSeconds() {
@@ -356,12 +534,24 @@ function buildSettings(pathOverrides = {}) {
       intervalSeconds: getIntervalSeconds(),
     },
     metadata: getProjectMetadata(),
+    review: {
+      tags: getCheckedTags(),
+      priority: els.reviewPriority.value || "情報",
+      filterTag: state.filters.tag,
+      filterPriority: state.filters.priority,
+    },
   };
 }
 
 function scheduleSaveSettings() {
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(() => saveSettings(), 250);
+}
+
+function scheduleAutoSaveProject() {
+  if (!state.outputDirectory || state.frames.length === 0) return;
+  clearTimeout(state.saveTimer);
+  state.saveTimer = setTimeout(() => saveProject(), 500);
 }
 
 async function saveSettings(pathOverrides = {}) {
@@ -427,6 +617,16 @@ function pad2(value) {
 function clampNumber(value, min, max, fallback) {
   if (!Number.isFinite(value)) return fallback;
   return Math.min(max, Math.max(min, value));
+}
+
+function priorityClass(priority) {
+  return {
+    要確認: "confirm",
+    是正: "fix",
+    保留: "hold",
+    完了: "done",
+    情報: "info",
+  }[priority] || "info";
 }
 
 function escapeHtml(value) {

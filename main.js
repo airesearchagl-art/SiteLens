@@ -5,21 +5,12 @@ const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 
 const SUPPORTED_EXTENSIONS = new Set([".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"]);
+const DEFAULT_PRIORITY = "情報";
 const DEFAULT_SETTINGS = {
-  paths: {
-    lastInputDirectory: "",
-    lastOutputDirectory: "",
-  },
-  extraction: {
-    intervalSeconds: 30,
-  },
-  metadata: {
-    projectName: "",
-    shootingDate: "",
-    photographer: "",
-    location: "",
-    memo: "",
-  },
+  paths: { lastInputDirectory: "", lastOutputDirectory: "" },
+  extraction: { intervalSeconds: 30 },
+  metadata: { projectName: "", shootingDate: "", photographer: "", location: "", memo: "" },
+  review: { tags: [], priority: DEFAULT_PRIORITY, filterTag: "", filterPriority: "" },
 };
 
 let mainWindow;
@@ -33,13 +24,8 @@ function createWindow() {
     minHeight: 720,
     title: "SiteLens",
     icon: path.join(__dirname, "assets", "icon.ico"),
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      preload: path.join(__dirname, "preload.js"),
-    },
+    webPreferences: { nodeIntegration: false, contextIsolation: true, preload: path.join(__dirname, "preload.js") },
   });
-
   mainWindow.loadFile("index.html");
 }
 
@@ -47,7 +33,6 @@ app.whenReady().then(() => {
   app.setAppUserModelId("jp.airesearchagl.sitelens");
   registerIpc();
   createWindow();
-
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -63,12 +48,13 @@ function registerIpc() {
   ipcMain.handle("settings:get", getSavedSettings);
   ipcMain.handle("settings:save", (_event, settings) => saveSettings(settings));
   ipcMain.handle("file:select-video", selectVideoFile);
-  ipcMain.handle("folder:select-output", selectOutputFolder);
+  ipcMain.handle("folder:select-output", (_event, defaultPath) => selectOutputFolder(defaultPath));
   ipcMain.handle("folder:open", (_event, folderPath) => openFolder(folderPath));
   ipcMain.handle("video:probe", (_event, filePath) => probeVideo(filePath));
   ipcMain.handle("frames:extract", (_event, payload) => extractFrames(payload));
   ipcMain.handle("frames:copy-selected", (_event, payload) => copySelectedFrames(payload));
   ipcMain.handle("project:save", (_event, payload) => saveProjectMetadata(payload));
+  ipcMain.handle("review:export-csv", (_event, payload) => exportReviewCsv(payload));
 }
 
 async function checkTools() {
@@ -78,14 +64,7 @@ async function checkTools() {
     getToolVersion(ffmpeg.command, ["-version"]),
     getToolVersion(ffprobe.command, ["-version"]),
   ]);
-  return {
-    ffmpegPath: ffmpeg.command,
-    ffprobePath: ffprobe.command,
-    ffmpegSource: ffmpeg.source,
-    ffprobeSource: ffprobe.source,
-    ffmpeg: ffmpegVersion,
-    ffprobe: ffprobeVersion,
-  };
+  return { ffmpegPath: ffmpeg.command, ffprobePath: ffprobe.command, ffmpegSource: ffmpeg.source, ffprobeSource: ffprobe.source, ffmpeg: ffmpegVersion, ffprobe: ffprobeVersion };
 }
 
 function resolveTool(toolName) {
@@ -111,22 +90,16 @@ function getToolVersion(command, args) {
     child.on("error", (error) => resolve({ available: false, message: error.message }));
     child.on("close", (code) => {
       const text = output || errorOutput;
-      resolve({
-        available: code === 0,
-        message: code === 0 ? firstLine(text) : errorOutput || output || `exit code ${code}`,
-        version: firstLine(text),
-      });
+      resolve({ available: code === 0, message: code === 0 ? firstLine(text) : errorOutput || output || `exit code ${code}`, version: firstLine(text) });
     });
   });
 }
 
 async function selectVideoFile() {
   const settings = getSavedSettings();
-  const defaultPath = settings.paths.lastInputDirectory && fs.existsSync(settings.paths.lastInputDirectory)
-    ? settings.paths.lastInputDirectory
-    : undefined;
+  const defaultPath = settings.paths.lastInputDirectory && fs.existsSync(settings.paths.lastInputDirectory) ? settings.paths.lastInputDirectory : undefined;
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: "動画ファイルを選択",
+    title: "Select video file",
     properties: ["openFile"],
     defaultPath,
     filters: [{ name: "Video", extensions: ["mp4", "mov", "m4v", "avi", "mkv", "webm"] }],
@@ -142,28 +115,15 @@ async function selectOutputFolder(defaultPath) {
     : settings.paths.lastOutputDirectory && fs.existsSync(settings.paths.lastOutputDirectory)
       ? settings.paths.lastOutputDirectory
       : undefined;
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: "出力フォルダを選択",
-    properties: ["openDirectory", "createDirectory"],
-    defaultPath: initialPath,
-  });
+  const result = await dialog.showOpenDialog(mainWindow, { title: "Select output folder", properties: ["openDirectory", "createDirectory"], defaultPath: initialPath });
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0];
 }
 
 async function probeVideo(filePath) {
   validateInputFile(filePath);
-  const result = await runProcess(resolveToolPath("ffprobe"), [
-    "-v", "error",
-    "-print_format", "json",
-    "-show_format",
-    "-show_streams",
-    filePath,
-  ]);
-  if (result.code !== 0) {
-    throw new UserError("ffprobeの実行に失敗しました。FFmpeg同梱ファイルを確認してください。");
-  }
-
+  const result = await runProcess(resolveToolPath("ffprobe"), ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", filePath]);
+  if (result.code !== 0) throw new UserError("ffprobe failed.");
   const data = JSON.parse(result.stdout);
   const videoStream = data.streams.find((stream) => stream.codec_type === "video") || {};
   const stat = fs.statSync(filePath);
@@ -187,29 +147,14 @@ async function extractFrames(payload = {}) {
   const outputDirectory = payload.outputDirectory || buildDefaultOutputDirectory(payload.filePath);
   fs.mkdirSync(outputDirectory, { recursive: true });
   ensureWritable(outputDirectory);
-
   const baseName = sanitizeFileName(path.parse(payload.filePath).name);
   const outputPattern = path.join(outputDirectory, `${baseName}_%04d.jpg`);
-  const args = [
-    "-y",
-    "-i", payload.filePath,
-    "-vf", `fps=1/${intervalSeconds}`,
-    "-q:v", "2",
-    outputPattern,
-  ];
-
+  const args = ["-y", "-i", payload.filePath, "-vf", `fps=1/${intervalSeconds}`, "-q:v", "2", outputPattern];
   const startedAt = Date.now();
   const result = await runFfmpegWithProgress(args, metadata.duration, startedAt);
-  if (result.code !== 0) {
-    throw new UserError(`静止画抽出に失敗しました。\n${lastLines(result.stderr, 8)}`);
-  }
-
+  if (result.code !== 0) throw new UserError(`Frame extraction failed.\n${lastLines(result.stderr, 8)}`);
   const frames = listExtractedFrames(outputDirectory, baseName, intervalSeconds);
-  return {
-    outputDirectory,
-    intervalSeconds,
-    frames,
-  };
+  return { outputDirectory, intervalSeconds, frames };
 }
 
 function runFfmpegWithProgress(args, duration, startedAt) {
@@ -223,27 +168,19 @@ function runFfmpegWithProgress(args, duration, startedAt) {
       stderr += text;
       emitProgress(text, duration, startedAt);
     });
-    currentProcess.on("error", (error) => {
-      currentProcess = null;
-      reject(new UserError("FFmpegの起動に失敗しました。", error));
-    });
-    currentProcess.on("close", (code) => {
-      currentProcess = null;
-      sendProgress({ status: code === 0 ? "完了" : "失敗", percent: code === 0 ? 100 : 0 });
-      resolve({ code, stdout, stderr });
-    });
+    currentProcess.on("error", (error) => { currentProcess = null; reject(new UserError("FFmpeg start failed.", error)); });
+    currentProcess.on("close", (code) => { currentProcess = null; sendProgress({ status: code === 0 ? "完了" : "失敗", percent: code === 0 ? 100 : 0 }); resolve({ code, stdout, stderr }); });
   });
 }
 
 async function copySelectedFrames(payload = {}) {
   const frames = Array.isArray(payload.frames) ? payload.frames : [];
-  if (frames.length === 0) throw new UserError("コピーする画像を選択してください。");
+  if (frames.length === 0) throw new UserError("No selected frames.");
   const sourceDirectory = payload.sourceDirectory;
-  if (!sourceDirectory || !fs.existsSync(sourceDirectory)) throw new UserError("抽出画像フォルダが見つかりません。");
+  if (!sourceDirectory || !fs.existsSync(sourceDirectory)) throw new UserError("Source frame folder not found.");
   const destinationDirectory = payload.destinationDirectory || path.join(path.dirname(sourceDirectory), "Selected_Frames");
   fs.mkdirSync(destinationDirectory, { recursive: true });
   ensureWritable(destinationDirectory);
-
   const copied = [];
   for (const frame of frames) {
     const sourcePath = frame.path || frame.filePath;
@@ -257,19 +194,38 @@ async function copySelectedFrames(payload = {}) {
 
 async function saveProjectMetadata(payload = {}) {
   const outputDirectory = payload.outputDirectory;
-  if (!outputDirectory) throw new UserError("出力フォルダを選択してください。");
+  if (!outputDirectory) throw new UserError("Output folder is required.");
   fs.mkdirSync(outputDirectory, { recursive: true });
+  const metadata = normalizeProjectMetadata(payload.metadata || {});
+  const reviewItems = normalizeReviewItems(payload.reviewItems || payload.frames || []);
   const project = {
     app: "SiteLens",
     version: app.getVersion(),
     savedAt: new Date().toISOString(),
+    project: metadata.projectName,
     video: payload.video || null,
-    metadata: normalizeProjectMetadata(payload.metadata || {}),
+    metadata,
     frames: Array.isArray(payload.frames) ? payload.frames : [],
+    reviewItems,
   };
   const projectPath = path.join(outputDirectory, "sitelens-project.json");
   fs.writeFileSync(projectPath, `${JSON.stringify(project, null, 2)}\n`, "utf8");
   return { projectPath };
+}
+
+async function exportReviewCsv(payload = {}) {
+  const outputDirectory = payload.outputDirectory;
+  if (!outputDirectory) throw new UserError("Output folder is required.");
+  fs.mkdirSync(outputDirectory, { recursive: true });
+  ensureWritable(outputDirectory);
+  const items = normalizeReviewItems(payload.reviewItems || []).filter((item) => item.selected !== false);
+  const lines = [["file", "timestamp", "priority", "tags", "comment"].join(",")];
+  for (const item of items) {
+    lines.push([csvValue(item.file), csvValue(item.timestamp), csvValue(item.priority), csvValue(item.tags.join("|")), csvValue(item.comment)].join(","));
+  }
+  const csvPath = path.join(outputDirectory, "sitelens-review.csv");
+  fs.writeFileSync(csvPath, `${lines.join("\r\n")}\r\n`, "utf8");
+  return { csvPath, count: items.length };
 }
 
 function listExtractedFrames(directory, baseName, intervalSeconds) {
@@ -279,14 +235,7 @@ function listExtractedFrames(directory, baseName, intervalSeconds) {
   return files.map((file, index) => {
     const filePath = path.join(directory, file);
     const timeSeconds = index * intervalSeconds;
-    return {
-      fileName: file,
-      path: filePath,
-      previewUrl: pathToFileURL(filePath).href,
-      timeSeconds,
-      timecode: formatTimecode(timeSeconds),
-      selected: true,
-    };
+    return { fileName: file, path: filePath, previewUrl: pathToFileURL(filePath).href, timeSeconds, timecode: formatTimecode(timeSeconds), selected: true, tags: [], priority: DEFAULT_PRIORITY, comment: "", floor: "", grid: "", room: "" };
   });
 }
 
@@ -301,11 +250,7 @@ function getSettingsPath() {
 function getSavedSettings() {
   const settingsPath = getSettingsPath();
   if (!fs.existsSync(settingsPath)) return cloneDefaultSettings();
-  try {
-    return normalizeSettings(JSON.parse(fs.readFileSync(settingsPath, "utf8")));
-  } catch {
-    return cloneDefaultSettings();
-  }
+  try { return normalizeSettings(JSON.parse(fs.readFileSync(settingsPath, "utf8"))); } catch { return cloneDefaultSettings(); }
 }
 
 function saveSettings(settings = {}) {
@@ -320,25 +265,41 @@ function normalizeSettings(settings = {}) {
   const paths = settings.paths || {};
   const extraction = settings.extraction || {};
   return {
-    paths: {
-      lastInputDirectory: typeof paths.lastInputDirectory === "string" ? paths.lastInputDirectory : "",
-      lastOutputDirectory: typeof paths.lastOutputDirectory === "string" ? paths.lastOutputDirectory : "",
-    },
-    extraction: {
-      intervalSeconds: clampNumber(Number(extraction.intervalSeconds), 1, 3600, DEFAULT_SETTINGS.extraction.intervalSeconds),
-    },
+    paths: { lastInputDirectory: stringValue(paths.lastInputDirectory), lastOutputDirectory: stringValue(paths.lastOutputDirectory) },
+    extraction: { intervalSeconds: clampNumber(Number(extraction.intervalSeconds), 1, 3600, DEFAULT_SETTINGS.extraction.intervalSeconds) },
     metadata: normalizeProjectMetadata(settings.metadata || {}),
+    review: normalizeReviewSettings(settings.review || {}),
   };
 }
 
+function normalizeReviewSettings(review = {}) {
+  return { tags: Array.isArray(review.tags) ? review.tags.filter((tag) => typeof tag === "string") : [], priority: stringValue(review.priority) || DEFAULT_PRIORITY, filterTag: stringValue(review.filterTag), filterPriority: stringValue(review.filterPriority) };
+}
+
+function normalizeReviewItems(items = []) {
+  return (Array.isArray(items) ? items : []).map((item) => ({
+    file: stringValue(item.file || item.fileName),
+    frame: stringValue(item.frame || item.file || item.fileName),
+    timestamp: stringValue(item.timestamp || item.timecode),
+    timecode: stringValue(item.timecode || item.timestamp),
+    priority: stringValue(item.priority) || DEFAULT_PRIORITY,
+    tags: Array.isArray(item.tags) ? item.tags.filter((tag) => typeof tag === "string") : [],
+    comment: stringValue(item.comment),
+    floor: stringValue(item.floor),
+    grid: stringValue(item.grid),
+    room: stringValue(item.room),
+    selected: item.selected !== false,
+  }));
+}
+
 function normalizeProjectMetadata(metadata = {}) {
-  return {
-    projectName: stringValue(metadata.projectName),
-    shootingDate: stringValue(metadata.shootingDate),
-    photographer: stringValue(metadata.photographer),
-    location: stringValue(metadata.location),
-    memo: stringValue(metadata.memo),
-  };
+  return { projectName: stringValue(metadata.projectName), shootingDate: stringValue(metadata.shootingDate), photographer: stringValue(metadata.photographer), location: stringValue(metadata.location), memo: stringValue(metadata.memo) };
+}
+
+function csvValue(value) {
+  const text = String(value ?? "");
+  if (/[",\r\n]/.test(text)) return `"${text.replaceAll('"', '""')}"`;
+  return text;
 }
 
 function emitProgress(text, duration, startedAt) {
@@ -349,32 +310,22 @@ function emitProgress(text, duration, startedAt) {
 }
 
 function sendProgress(payload) {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send("frames:progress", payload);
-  }
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("frames:progress", payload);
 }
 
 async function openFolder(folderPath) {
-  if (!folderPath || !fs.existsSync(folderPath)) throw new UserError("フォルダが見つかりません。");
+  if (!folderPath || !fs.existsSync(folderPath)) throw new UserError("Folder not found.");
   await shell.openPath(folderPath);
   return true;
 }
 
 function validateInputFile(filePath) {
-  if (!filePath || typeof filePath !== "string" || !fs.existsSync(filePath)) {
-    throw new UserError("動画ファイルを読み込めません。");
-  }
-  if (!SUPPORTED_EXTENSIONS.has(path.extname(filePath).toLowerCase())) {
-    throw new UserError("対応形式は mp4 / mov / m4v / avi / mkv / webm です。");
-  }
+  if (!filePath || typeof filePath !== "string" || !fs.existsSync(filePath)) throw new UserError("Video file not found.");
+  if (!SUPPORTED_EXTENSIONS.has(path.extname(filePath).toLowerCase())) throw new UserError("Unsupported video format.");
 }
 
 function ensureWritable(directory) {
-  try {
-    fs.accessSync(directory, fs.constants.W_OK);
-  } catch {
-    throw new UserError("出力フォルダに書き込めません。権限を確認してください。");
-  }
+  try { fs.accessSync(directory, fs.constants.W_OK); } catch { throw new UserError("Output folder is not writable."); }
 }
 
 function runProcess(command, args) {
@@ -384,7 +335,7 @@ function runProcess(command, args) {
     let stderr = "";
     child.stdout.on("data", (data) => { stdout += data.toString(); });
     child.stderr.on("data", (data) => { stderr += data.toString(); });
-    child.on("error", (error) => reject(new UserError("外部ツールの起動に失敗しました。", error)));
+    child.on("error", (error) => reject(new UserError("External tool start failed.", error)));
     child.on("close", (code) => resolve({ code, stdout, stderr }));
   });
 }
