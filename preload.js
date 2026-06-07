@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld("siteLens", {
   copySelectedFrames: (payload) => ipcRenderer.invoke("frames:copy-selected", payload),
   saveProject: (payload) => ipcRenderer.invoke("project:save", payload),
   exportReviewCsv: (payload) => ipcRenderer.invoke("review:export-csv", payload),
+  exportReviewPptx: (payload) => ipcRenderer.invoke("review:export-pptx", payload),
   onProgress: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on("frames:progress", listener);

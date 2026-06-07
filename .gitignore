@@ -1,4 +1,5 @@
 ﻿node_modules/
 dist/
+SiteLens_Report/
 *.log
 .DS_Store

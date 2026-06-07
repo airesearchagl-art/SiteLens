@@ -47,6 +47,7 @@ const els = {
   memo: document.querySelector("#memo"),
   saveProjectButton: document.querySelector("#saveProjectButton"),
   exportCsvButton: document.querySelector("#exportCsvButton"),
+  exportPptxButton: document.querySelector("#exportPptxButton"),
   frameCount: document.querySelector("#frameCount"),
   selectAllFrames: document.querySelector("#selectAllFrames"),
   clearFrameSelection: document.querySelector("#clearFrameSelection"),
@@ -89,6 +90,7 @@ function bindEvents() {
   els.openOutputButton.addEventListener("click", openOutputDirectory);
   els.saveProjectButton.addEventListener("click", saveProject);
   els.exportCsvButton.addEventListener("click", exportReviewCsv);
+  els.exportPptxButton.addEventListener("click", exportReviewPptx);
   els.copySelectedButton.addEventListener("click", copySelectedFrames);
   els.selectAllFrames.addEventListener("click", () => setFrameSelection(true));
   els.clearFrameSelection.addEventListener("click", () => setFrameSelection(false));
@@ -226,7 +228,7 @@ async function loadVideo(filePath) {
     state.metadata = await window.siteLens.probeVideo(filePath);
     renderMetadata();
     if (!state.outputDirectory) {
-      state.outputDirectory = `${state.metadata.directory}\\SiteLens_Frames`;
+      state.outputDirectory = `${state.metadata.directory}\\SiteLens_Report`;
       els.outputDirectoryText.textContent = state.outputDirectory;
     }
     els.extractButton.disabled = false;
@@ -270,7 +272,7 @@ async function extractFrames() {
   setRunStatus("抽出中", 0);
   try {
     const intervalSeconds = getIntervalSeconds();
-    const outputDirectory = state.outputDirectory || `${state.metadata.directory}\\SiteLens_Frames`;
+    const outputDirectory = state.outputDirectory || `${state.metadata.directory}\\SiteLens_Report`;
     const result = await window.siteLens.extractFrames({
       filePath: state.metadata.filePath,
       intervalSeconds,
@@ -327,6 +329,26 @@ async function exportReviewCsv() {
       reviewItems: selectedItems,
     });
     showNotice(`CSVを出力しました: ${result.csvPath}`);
+  } catch (error) {
+    showError(toMessage(error));
+  }
+}
+
+async function exportReviewPptx() {
+  const selectedFrames = state.frames.filter((frame) => frame.selected);
+  if (!selectedFrames.length) {
+    showError("PowerPoint出力対象がありません");
+    return;
+  }
+  try {
+    const result = await window.siteLens.exportReviewPptx({
+      outputDirectory: state.outputDirectory,
+      metadata: getProjectMetadata(),
+      video: state.metadata,
+      frames: selectedFrames,
+    });
+    showNotice(`PowerPoint出力完了: ${result.pptxPath}`);
+    els.openOutputButton.disabled = false;
   } catch (error) {
     showError(toMessage(error));
   }
@@ -469,6 +491,7 @@ function updateFrameControls() {
   els.frameCount.textContent = `${selected} / ${total} selected (${visible} visible)`;
   els.copySelectedButton.disabled = selected === 0;
   els.exportCsvButton.disabled = selected === 0;
+  els.exportPptxButton.disabled = selected === 0;
   els.selectAllFrames.disabled = visible === 0;
   els.clearFrameSelection.disabled = visible === 0;
 }
@@ -481,6 +504,7 @@ function resetFrames() {
   els.copySelectedButton.disabled = true;
   els.saveProjectButton.disabled = true;
   els.exportCsvButton.disabled = true;
+  els.exportPptxButton.disabled = true;
   renderActiveFrameReview();
   updateFrameControls();
 }
@@ -488,6 +512,8 @@ function resetFrames() {
 function getReviewItems() {
   return state.frames.map((frame) => ({
     file: frame.fileName,
+    fileName: frame.fileName,
+    path: frame.path,
     frame: frame.fileName,
     timestamp: frame.timecode,
     timecode: frame.timecode,

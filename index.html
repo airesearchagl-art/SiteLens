@@ -16,6 +16,7 @@
         </div>
         <div class="status-stack">
           <span id="toolStatus" class="status-chip">FFmpeg checking</span>
+          <button id="exportPptxButton" class="primary-button header-action" type="button" disabled>PowerPoint出力</button>
         </div>
       </header>
 
@@ -72,7 +73,7 @@
               <div class="output-row">
                 <div>
                   <span>出力先</span>
-                  <strong id="outputDirectoryText">元動画と同じフォルダ/SiteLens_Frames</strong>
+                  <strong id="outputDirectoryText">元動画と同じフォルダ/SiteLens_Report</strong>
                 </div>
                 <button id="selectOutputButton" class="secondary-button" type="button">出力先を選択</button>
               </div>
@@ -151,7 +152,7 @@
         </section>
       </main>
 
-      <div id="versionBadge" class="version-badge">SiteLens v0.2.0</div>
+      <div id="versionBadge" class="version-badge">SiteLens v0.3.0</div>
     </div>
     <script src="renderer.js"></script>
   </body>
